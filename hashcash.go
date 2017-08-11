@@ -3,6 +3,7 @@ package provingwork
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 
 	"math/big"
 
@@ -13,10 +14,6 @@ import (
 	"encoding/json"
 )
 
-// HashCash format:
-// 1:20:20160927155710:somedatatovalidate::aW5ZdXJQcm90b2NvbHMh:VvJC
-// version, zero bits, date, resource, extension (ignored), rand, counter
-
 type HashCash struct {
 	Counter  int64  `json:"counter"`
 	Resource []byte `json:"resource"`
@@ -24,40 +21,8 @@ type HashCash struct {
 	*WorkOptions
 }
 
-// An alias type that won't have any of functions (mostly to avoid an infinite
-// loop with the overidden MarshalJSON function)
-type RawHashCash HashCash
-
-// This is a special version of the HashCash that has the types we want to
-// be importing / exporting.
-type HashCashExt struct {
-	Timestamp int64 `json:"timestamp"`
-
-	*RawHashCash
-}
-
-func (wo HashCash) MarshalJSON() ([]byte, error) {
-	woe := HashCashExt{RawHashCash: (*RawHashCash)(&wo)}
-
-	if wo.Timestamp != nil {
-		woe.Timestamp = wo.Timestamp.Unix()
-	}
-
-	return json.Marshal(woe)
-}
-
-func (wo HashCash) UnmarshalJSON(data []byte) error {
-	woe := HashCashExt{RawHashCash: (*RawHashCash)(&wo)}
-
-	if err := json.Unmarshal(data, woe); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func NewHashCash(resource []byte, opts ...*WorkOptions) *HashCash {
-	hc := HashCash{ Resource: resource }
+	hc := HashCash{Resource: resource}
 
 	if len(opts) != 0 {
 		hc.WorkOptions = opts[0]
@@ -68,6 +33,37 @@ func NewHashCash(resource []byte, opts ...*WorkOptions) *HashCash {
 	setDefaultWorkOptions(hc.WorkOptions)
 
 	return &hc
+}
+
+func (wo HashCash) ToJson() ([]byte, error) {
+
+	return json.Marshal(wo)
+}
+
+func Check(data []byte, toProof []byte, opts ...*WorkOptions) (hc *HashCash, err error) {
+
+	hc = NewHashCash(nil, opts...)
+
+	err = json.Unmarshal(data, hc)
+	if err != nil {
+		return
+	}
+
+	ok := reflect.DeepEqual(hc.Resource, toProof)
+	if !ok {
+
+		err = fmt.Errorf("proofs differ received: %s expected: %s")
+		return
+	}
+
+	ok = hc.Check()
+	if !ok {
+
+		err = fmt.Errorf("proof is not valid")
+		return
+	}
+
+	return
 }
 
 func (hc HashCash) Check() bool {
@@ -92,11 +88,11 @@ func (hc *HashCash) FindProof() {
 	}
 }
 
-func (hc HashCash) String() string {
+func (hc HashCash) Hash() string {
+
 	return fmt.Sprintf(
 		"1:%v:%v:%v:%v:%v:%v",
 		hc.BitStrength,
-		hc.Timestamp.Format("20060102150405"),
 		string(hc.Resource),
 		string(hc.Extension),
 		base64.StdEncoding.EncodeToString(hc.Salt),
@@ -105,7 +101,7 @@ func (hc HashCash) String() string {
 }
 
 func (hc HashCash) ZeroCount() int {
-	digest := sha1.Sum([]byte(hc.String()))
+	digest := sha1.Sum([]byte(hc.Hash()))
 	digestHex := new(big.Int).SetBytes(digest[:])
 	return ((sha1.Size * 8) - digestHex.BitLen())
 }
